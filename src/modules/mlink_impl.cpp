@@ -1,4 +1,3 @@
-module;
 #include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -6,7 +5,7 @@ module;
 #include <iostream>
 #include <sstream>
 #include <utility>
-module mlink;
+#include "mlink.hpp"
 import exec_arg;
 import explicit_enum;
 import error_string;

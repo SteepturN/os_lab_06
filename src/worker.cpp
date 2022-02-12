@@ -2,68 +2,92 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <string>
-import mlink;
-import explicit_enum;
-import timer;
-import exec_arg;
+#include "mlink.hpp"
+#include "explicit_enum.hpp"
+#include "timer.hpp"
 
-int main( int argc, char** argv) {
-
+void manage_command( MLink* link, int direction, const std::string& message, MLink::Command command, int another_id, int my_id );
+int main( int argc, const char** argv ) {
+	using Link = MLink::Link;
 	int my_id; // my left right
 	pid_t pid = getpid();
-	Timer timer:
+	Timer timer;
 	MLink link[ 3 ]; //up, left, rigth
 
 	MLink::get_id( my_id, argv );
-	link[ MLink::up ].create( pid, my_id );
+	std::cout << "worker " << pid << ": got id = " << my_id << std::endl;
+	link[ Link::up ].create( pid, my_id, true, false );
 	bool all_good = true;
 	std::string message;
 	while( all_good ) {
-		if( link[ MLink::left ].exist() )
-			link[ MLink::up ] << link[ MLink::left ];
-		if( link[ MLink::rigth ].exist() )
-			link[ MLink::up ] << link[ MLink::right ];
+		if( link[ Link::left ].exist() )
+			link[ Link::up ] << link[ MLink::left ];
+		if( link[ Link::right ].exist() )
+			link[ Link::up ] << link[ MLink::right ];
 
-		link[ MLink::up ].get_message( message );
+		link[ Link::up ].get_message( message );
+
+		std::cout << "worker " << pid << ": got message: " << message << std::endl;
+
 		MLink::Command command = MLink::get_command( message );
-		if( command == MLink::error_c ) {
+		if( command == MLink::Command::error_c ) {
+
+			std::cout << "and its an error" << std::endl;
+
 			std::cerr << my_id << " can't send message\n";
-			pause();
+			exit( ReturnValue::error_unavailable_node );
 		} //shit commands aren't allowed
 		int another_id = MLink::get_id( message );
-		if( another_id > id[ ID::my ] ) {
-			manage_command( link, MLink::right, message, command, another_id, my_id );
-		} else if ( another_id < id[ ID::my ] ) {
-			manage_command( link, MLink::left, message, command, another_id, my_id );
+		if( another_id > my_id ) {
+
+			std::cout << "and its to id = " << another_id << std::endl;
+
+			manage_command( link, Link::right, message, command, another_id, my_id );
+		} else if ( another_id < my_id ) {
+
+			std::cout << "and its to id = " << another_id << std::endl;
+
+			manage_command( link, Link::left, message, command, another_id, my_id );
 		} else {
+			MLink::ExecCommand ecommand;
+			std::string reply;
 			switch( command ) {
-				case MLink::attach_c:
+				case MLink::Command::attach_c:
+
+					std::cout << "and its attach with duplication of my id" << std::endl;
+
 					MLink::kill_process( message );
-					link[ MLink::up ].send_message( MLink::error_id_already_exist( id_my ) );
+					link[ Link::up ].send_message( MLink::error_id_already_exist( my_id ) );
 					break;
-				case MLink::exec_c:
-					MLink::ExecCommand ecommand = MLink::get_exec_command( message );
-					std::string reply;
-					if( ecommand == MLink::time ) {
-						reply = MLink::exec_reply_message( timer.time(), id[ ID::my ], ecommand );
+				case MLink::Command::exec_c:
+
+					std::cout << "and its exec" << std::endl;
+
+					ecommand = MLink::get_exec_command( message );
+					if( ecommand == MLink::ExecCommand::time ) {
+						reply = MLink::exec_reply_message( timer.time(), my_id, ecommand );
 					} else {
-						reply = MLink::exec_reply_message( id[ ID::my ], ecommand );
-						if( ecommand == MLink::stop ) {
+						reply = MLink::exec_reply_message( my_id, ecommand );
+						if( ecommand == MLink::ExecCommand::stop ) {
 							timer.stop();
-						} else if( ecommand == Mlink::start ) {
+						} else if( ecommand == MLink::ExecCommand::start ) {
 							timer.start();
 						}
 					}
 					link[ MLink::up ].send_message( reply );
 					break;
-				case MLink::ping_c:
-					std::string reply = MLink::ping_reply_message( id[ ID::my ] );
-					link[ MLink::up ].send_message( reply );
+				case MLink::Command::ping_c:
+
+					std::cout << "and its ping" << std::endl;
+
+					reply = MLink::ping_reply_message( my_id );
+					link[ Link::up ].send_message( reply );
 					break;
-				case Mlink::close_c:
+				case MLink::Command::close_c:
+
+					std::cout << "and its close" << std::endl;
+
 					all_good = false;
-					if( link[ MLink::left ].exist() ) link[ MLink::left ].command_close();
-					if( link[ MLink::right ].exist() ) link[ MLink::right ].command_close();
 					break;
 			}
 		}
@@ -73,13 +97,22 @@ int main( int argc, char** argv) {
 
 void manage_command( MLink* link, int direction, const std::string& message, MLink::Command command, int another_id, int my_id ) {
 	if( link[ direction ].exist() ) {
+
+		std::cout << "and I'm sending it to this id" << std::endl;
+
 		link[ direction ].send_message( message ); // check when sending is better overall
-	} else if( command == MLink::attach ) {
+	} else if( command == MLink::Command::attach_c ) {
+
+		std::cout << "and it's attach, so I will attach it" << std::endl;
+
 		link[ direction ].attach_worker( message, my_id ); //errors?
 		std::string reply = MLink::attach_reply_message( message, my_id );
-		link[ MLink::up ].send_message( reply );
+		link[ MLink::Link::up ].send_message( reply );
 	} else {
+
+		std::cout << "and it was an error, no one is attached and connection doesn't exist" << std::endl;
+
 		std::string error_reply = MLink::error_id_doesnt_exist( another_id, my_id );
-		link[ MLink::up ].send_error( error_reply ); //errors?
+		link[ MLink::Link::up ].send_message( error_reply ); //errors?
 	}
 }

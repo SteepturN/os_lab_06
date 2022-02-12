@@ -1,9 +1,6 @@
-module;
 #include <string>
 
-export module error_string;
-
-export namespace Error {
+namespace Error {
 	std::string forking_process( const int pid ) {
 		std::string return_str = "error: forking process: ";
 		return return_str + std::to_string( pid );
