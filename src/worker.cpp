@@ -6,88 +6,92 @@
 #include "explicit_enum.hpp"
 #include "timer.hpp"
 
-void manage_command( MLink* link, int direction, const std::string& message, MLink::Command command, int another_id, int my_id );
+void manage_command( MNode&, int, const std::string&, MNode::Command, int, int );
 int main( int argc, const char** argv ) {
-	using Link = MLink::Link;
 	int my_id; // my left right
 	pid_t pid = getpid();
 	Timer timer;
-	MLink link[ 3 ]; //up, left, rigth
+	MNode node; //up, left, rigth
 
-	MLink::get_id( my_id, argv );
+	MNode::get_id( my_id, argv );
 	std::cout << "worker " << pid << ": got id = " << my_id << std::endl;
-	link[ Link::up ].create( pid, my_id, true, false );
+	node.create_link( Link::up, pid, my_id );
 	bool all_good = true;
 	std::string message;
 	while( all_good ) {
-		if( link[ Link::left ].exist() )
-			link[ Link::up ] << link[ MLink::left ];
-		if( link[ Link::right ].exist() )
-			link[ Link::up ] << link[ MLink::right ];
-
-		link[ Link::up ].get_message( message );
+		node.get_message( -1, message, true );
 
 		std::cout << "worker " << pid << ": got message: " << message << std::endl;
 
-		MLink::Command command = MLink::get_command( message );
-		if( command == MLink::Command::error_c ) {
-
+		MNode::Command command = MNode::get_command( message );
+		if( command == MNode::Command::instant_ping ) {
+			node.instant_ping_reply( message );
+			continue;
+		} else if( command == MNode::Command::error_c ) {
+// I can go straight to the worker, which id would fit for attaching or find out, that sended id already exists
 			std::cout << "and its an error" << std::endl;
 
 			std::cerr << my_id << " can't send message\n";
-			exit( ReturnValue::error_unavailable_node );
-		} //shit commands aren't allowed
-		int another_id = MLink::get_id( message );
+			return ReturnValue::error_unavailable_node;
+		} else if( command == MNode::Command::reply_c ) {
+			node.send_message( Link::up, message );
+			continue;
+		}
+
+		int another_id = MNode::get_id( message );
 		if( another_id > my_id ) {
 
 			std::cout << "and its to id = " << another_id << std::endl;
 
-			manage_command( link, Link::right, message, command, another_id, my_id );
+			manage_command( node, Link::right, message, command, another_id, my_id );
 		} else if ( another_id < my_id ) {
 
 			std::cout << "and its to id = " << another_id << std::endl;
 
-			manage_command( link, Link::left, message, command, another_id, my_id );
+			manage_command( node, Link::left, message, command, another_id, my_id );
 		} else {
-			MLink::ExecCommand ecommand;
+			MNode::ExecCommand ecommand;
 			std::string reply;
 			switch( command ) {
-				case MLink::Command::attach_c:
+				case MNode::Command::attach_c:
 
 					std::cout << "and its attach with duplication of my id" << std::endl;
 
-					MLink::kill_process( message );
-					link[ Link::up ].send_message( MLink::error_id_already_exist( my_id ) );
+					MNode::kill_process( message );
+					node.send_message( Link::up, MNode::error_id_already_exist( my_id ) );
 					break;
-				case MLink::Command::exec_c:
+				case MNode::Command::exec_c:
 
 					std::cout << "and its exec" << std::endl;
 
-					ecommand = MLink::get_exec_command( message );
-					if( ecommand == MLink::ExecCommand::time ) {
-						reply = MLink::exec_reply_message( timer.time(), my_id, ecommand );
+					ecommand = MNode::get_exec_command( message );
+					if( ecommand == MNode::ExecCommand::time ) {
+						reply = MNode::exec_reply_message( timer.time(), my_id, ecommand );
 					} else {
-						reply = MLink::exec_reply_message( my_id, ecommand );
-						if( ecommand == MLink::ExecCommand::stop ) {
+						reply = MNode::exec_reply_message( my_id, ecommand );
+						if( ecommand == MNode::ExecCommand::stop ) {
 							timer.stop();
-						} else if( ecommand == MLink::ExecCommand::start ) {
+						} else if( ecommand == MNode::ExecCommand::start ) {
 							timer.start();
 						}
 					}
-					link[ MLink::up ].send_message( reply );
+					node.send_message( Link::up, reply );
 					break;
-				case MLink::Command::ping_c:
+				case MNode::Command::ping_c:
 
 					std::cout << "and its ping" << std::endl;
 
-					reply = MLink::ping_reply_message( my_id );
-					link[ Link::up ].send_message( reply );
+					reply = MNode::ping_reply_message( my_id );
+					node.send_message( Link::up, reply );
 					break;
-				case MLink::Command::close_c:
+				case MNode::Command::close_c:
 
 					std::cout << "and its close" << std::endl;
 
 					all_good = false;
+					break;
+				default:
+					std::cerr << "worker's command handler failed\n";
 					break;
 			}
 		}
@@ -95,24 +99,24 @@ int main( int argc, const char** argv ) {
 	return ReturnValue::nice;
 }
 
-void manage_command( MLink* link, int direction, const std::string& message, MLink::Command command, int another_id, int my_id ) {
-	if( link[ direction ].exist() ) {
+void manage_command( MNode& node, int link, const std::string& message, MNode::Command command, int another_id, int my_id ) {
+	if( node.exist( link ) ) {
 
 		std::cout << "and I'm sending it to this id" << std::endl;
 
-		link[ direction ].send_message( message ); // check when sending is better overall
-	} else if( command == MLink::Command::attach_c ) {
+		node.send_message( link, message ); // check when sending is better overall
+	} else if( command == MNode::Command::attach_c ) {
 
 		std::cout << "and it's attach, so I will attach it" << std::endl;
 
-		link[ direction ].attach_worker( message, my_id ); //errors?
-		std::string reply = MLink::attach_reply_message( message, my_id );
-		link[ MLink::Link::up ].send_message( reply );
+		node.attach_worker( link, message ); //errors?
+		std::string reply = MNode::attach_reply_message( message, my_id );
+		node.send_message( Link::up, reply );
 	} else {
 
 		std::cout << "and it was an error, no one is attached and connection doesn't exist" << std::endl;
 
-		std::string error_reply = MLink::error_id_doesnt_exist( another_id, my_id );
-		link[ MLink::Link::up ].send_message( error_reply ); //errors?
+		std::string error_reply = MNode::error_id_doesnt_exist( another_id, my_id );
+		node.send_message( Link::up, error_reply ); //errors?
 	}
 }
