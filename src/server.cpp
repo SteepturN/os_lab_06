@@ -54,7 +54,7 @@ int main() {
 		}
 	};
 	std::thread message_handling( get_message );
-	std::cout << "You can use:\n"
+	std::cerr << "You can use:\n"
 	          << "\t->\tcreate [id]\n"
 	          << "\t->\texec [id] [command]\n"
 	          << "\t->\tping [id]\n";
@@ -65,21 +65,26 @@ int main() {
 		id = -1;
 		bool wait;
 		std::string reply;
-		while( !got_message || node.get_message( link, reply, wait = false ) ) {
-			manage_reply( reply, node, link );
-			reply.clear();
+		bool got_reply = true;
+		while( !got_message || got_reply ) {
+			got_reply = node.get_message( link, reply, wait = false );
+			if( got_reply ) {
+				manage_reply( reply, node, link );
+				reply.clear();
+			}
 		}
 		//I should remove ping when sending
 												   //from the first worker or make ping replier in another thread
-		// std::cout << NLink::parse_message( message );
+		// std::cerr << NLink::parse_message( message );
 		std::stringstream mssg( message );
 		if( wrong_input() ) {
 			got_message = false;
 			continue;
 		}
 		mssg >> command;
-		if( command == "exit" ){
+		if( command == "exit" ) {
 			stop_thread = true;
+			message_handling.join();
 			break;
 		} else if( command == "w" ) { //wait for messages
 			continue;
@@ -103,10 +108,10 @@ int main() {
 		} else if ( command == "ping" ) {
 			node.command_ping( link, id ); //even first could be broken tho'
 		} else {
-			std::cout << "wrong command" << std::endl;
+			std::cerr << "wrong command" << std::endl;
 		}
 		got_message = false;
-		std::cout << "\t> ";
+		std::cerr << "\t> ";
 	}
 	//while-loop: create [id]; exec [id] [start|stop|time]; ping [id]; exit
 
@@ -119,13 +124,13 @@ int main() {
 void manage_reply( const std::string& reply, MNode& node, int link ) {
 	MNode::Command command = MNode::get_command( reply );
 	if( command == MNode::Command::instant_ping ) {
-		node.instant_ping_reply( reply );
+		node.send_instant_ping_reply( reply );
 	} else if( command == MNode::Command::error_c ) {
 		std::cerr << "initial worker is anavailable";
 		return;
 	} else if( command == MNode::Command::reply_c ) {
-		std::cout << MNode::parse_reply( reply );
+		std::cerr << MNode::parse_reply( reply );
 	} else {
-		std::cerr << "received wrong message\n";
+		std::cerr << "received wrong message:" << reply << '\n';
 	}
 }

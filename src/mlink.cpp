@@ -5,28 +5,27 @@
 #include <iostream>
 #include <sstream>
 #include <utility>
-#include <time.h>
 #include "mlink.hpp"
 #include "exec_arg.hpp"
 #include "explicit_enum.hpp"
 #include "error_string.hpp"
 /*
-** instant_ping == "[Command::instant_ping] [id who sent it]"
-** instant_ping_reply = "[Reply::instant_ping]"
+** instant_ping == "[Command::instant_ping] [id: who sends it]"
+** instant_ping_reply = "[Command::instant_ping_reply] [id: who should get it]"
 ** out id = "[Command::id_c] [id]" // I have to do that because worker can't know who will be at the top channel[ queue::up ].id[ ID::out ]
 ** command:= "[Command] [id] "
 ** attach == "[Command::attach_c] [id_whom_to_attach] [pid]"
-** attach reply == "[Command::attach_c] [id who sends message] [id who was attached] [pid of attached process] [Reply::ok]"
 ** exec == "[Command::exec_c] [id] []"
-** exec reply == "[Command::exec_c] [id] [ExecCommand::... [if time->time_result]] [Reply::ok]"
 ** ping == "[Command::ping_c] [id]"
-** ping reply == "[Command::ping_c] [id] [Reply::ok]"
-** errors: [Command::error_c] [id]
-**                                 [MLError::id_unreachable] [id that is unreachable]
-**                                 [MLError::id_doesnt_exist] [id that is not exist]
-**                                 [MLError::id_already_exist]
 ** reply == "[Command::reply_c] [id to whom send it] [reply]"
-**
+	** attach reply == "[Command::attach_c] [id who sends message] [id who was attached] [pid of attached process] [Reply::ok]"
+	** ping reply == "[Command::ping_c] [id] [Reply::ok]"
+	** exec reply == "[Command::exec_c] [id] [ExecCommand::... [if time->time_result]] [Reply::ok]"
+	** errors: [Command::error_c] [id]
+	**                                 [MLError::id_unreachable] [id that is unreachable]
+	**                                 [MLError::id_doesnt_exist] [id that is not exist]
+	**                                 [MLError::id_already_exist]
+	**
 */
 
 MNode::MNode()
@@ -48,12 +47,14 @@ void MNode::create_consumer( int link, MNode::queue_e _queue, const std::string&
 	int queue = static_cast< int >( _queue );
 	if( _queue == queue_e::in ) {
 		consumer_tag[ link ][ static_cast< int >( consumer_e::in ) ] =
-			channel->BasicConsume( queue_name[ link ][ queue ], "", true, true, false );
+			channel->BasicConsume( queue_name[ link ][ queue ],
+			                       queue_name[ link ][ queue ], true, true, false );
 	} else if( _queue == queue_e::ping_in ) {
 		consumer_tag[ link ][ static_cast< int >( consumer_e::ping_in ) ] =
-			channel->BasicConsume( queue_name[ link ][ queue ], "", true, true, false );
+			channel->BasicConsume( queue_name[ link ][ queue ],
+			                       queue_name[ link ][ queue ], true, true, false );
 	} else {
-		std::cerr << "create_consumer fail\n";
+		std::cerr << "create_consumer has failed\n";
 	}
 }
 void MNode::create_publisher( int link, MNode::queue_e queue, const std::string& suffix ) {
@@ -103,8 +104,8 @@ void MNode::create( int link, pid_t pid, bool swap ) {
 
 	create( swap, "in:", "out:", pid, link, queue_e::in, true, true );
 	create( swap, "out:", "in:", pid, link, queue_e::out, true, false );
-	create( swap, "ping_in:", "ping_out:", pid, link, queue_e::in, false, true );
-	create( swap, "ping_out:", "ping_in:", pid, link, queue_e::out, true, false );
+	create( swap, "ping_in:", "ping_out:", pid, link, queue_e::ping_in, false, true );
+	create( swap, "ping_out:", "ping_in:", pid, link, queue_e::ping_out, true, false );
 
 	link_exists[ link ] = true;
 }
@@ -117,7 +118,7 @@ void MNode::create_link( int link, pid_t pid, int my_id ) {
 int MNode::get_out_id( int link ) {
 	std::string message;
 	bool wait;
-	get_message( link, message, wait = true, consumer_e::ping_in );
+	get_message( link, message, wait = true, consumer_e::in );
 	return get_out_id( message );
 }
 int MNode::get_out_id( const std::string& message ) {
@@ -142,14 +143,17 @@ bool MNode::exist( int link ) const {
 	return link_exists[ link ];
 }
 
+
+
+static int __time = 0;
 bool MNode::get_message( int link /* = -1 */, std::string& message,
                          bool wait /* = true */, MNode::consumer_e _consumer /* = default_arg */ ) {
 	//I could make variant with consumer != -1, but I don't need to
 	AmqpClient::Envelope::ptr_t envelope;
 	std::vector< std::string > consumers;
-	int in = static_cast< int >( consumer_e::in );
-	int ping_in = static_cast< int >( consumer_e::ping_in );
-	int consumer = static_cast< int >( _consumer );
+	const int in = static_cast< int >( consumer_e::in );
+	const int ping_in = static_cast< int >( consumer_e::ping_in );
+	const int consumer = static_cast< int >( _consumer );
 	if( link == -1 ) {
 		if( _consumer == MNode::consumer_e::default_arg ) { //all available
 			for( int i = 0; i < links_per_node; ++i ) {
@@ -165,7 +169,7 @@ bool MNode::get_message( int link /* = -1 */, std::string& message,
 				}
 			}
 		}
-	} else {
+	} else { //link != -1
 		if( _consumer == MNode::consumer_e::default_arg ) { //all available
 			if( link_exists[ link ] ) {
 				consumers.push_back( consumer_tag[ link ][ in ] );
@@ -177,17 +181,33 @@ bool MNode::get_message( int link /* = -1 */, std::string& message,
 			}
 		}
 	}
-	if( wait ) {
-		message = channel->BasicConsumeMessage( consumers )->Message()->Body(); //error? what if consumer_tag[ i ] == ""?
-		return true;
-	} else {
-		const int timeout = 100;
-		if ( channel->BasicConsumeMessage( consumers, envelope, timeout ) ) {
-			message = envelope->Message()->Body();
+	if( consumers.empty() ) {
+		return false;
+	}
+	if( __time == 0 ) {
+		std::cerr << "id " << id[ ID::my ] << ": consumers";
+		for( auto i : consumers ) std::cerr << " id " << id[ ID::my ] << ": <" << i << '>';
+		std::cerr << '\n';
+		__time = 1;
+	}
+	try {
+		if( wait ) {
+			message = channel->BasicConsumeMessage( consumers )->Message()->Body(); //error? what if consumer_tag[ i ] == ""?
+			__time = 0;
 			return true;
 		} else {
-			return false;
+			const int timeout = 100;
+			if ( channel->BasicConsumeMessage( consumers, envelope, timeout ) ) {
+				message = envelope->Message()->Body();
+				__time = 0;
+				return true;
+			} else {
+				return false;
+			}
 		}
+	} catch ( AmqpClient::ConsumerTagNotFoundException exc ) {
+		std::cerr << "id " << id[ ID::my ] << ": " << exc.what() << '\n';
+		return false;
 	}
 }
 
@@ -202,26 +222,30 @@ bool MNode::get_message( int link /* = -1 */, std::string& message,
 // 	return message == "p::";
 // }
 
-void MNode::instant_ping_reply( const std::string& command ) {
+void MNode::send_instant_ping_reply( const std::string& command ) {
 	std::stringstream mssg( command );
 	int useless;
 	int _id;
 	bool check_connection;
 	mssg >> useless >> _id;
+	mssg.str( "" );
+	mssg << static_cast< int >( Command::instant_ping_reply ) << ' ' << _id;
 	for( int link = 0; link < links_per_node; ++link ) {
 		if( link_exists[ link ] && ( id[ link ] == _id ) ) {
-			send_message( link, instant_ping_reply(),
+			std::cerr << "mssg instant ping:" << mssg.str() << '\n';
+
+			send_message( link, mssg.str(),
 			              check_connection = false, routing_key_e::ping_out );
 			return;
 		}
 	}
 	std::cerr << "instant_ping_reply failed\n";
 }
-std::string MNode::instant_ping_reply( const std::string& message ) {
-	std::stringstream mssg;
-	mssg << static_cast< int >( Command::reply_c ) << ' ' << message;
-	return mssg.str();
-}
+// std::string MNode::instant_ping_reply( const std::string& message ) {
+// 	std::stringstream mssg;
+// 	mssg << static_cast< int >( Command::reply_c ) << ' ' << message;
+// 	return mssg.str();
+// }
 
 MNode::Command MNode::get_command( const std::string& message ) {
 	std::stringstream mssg;
@@ -239,11 +263,11 @@ int MNode::get_id( const std::string& message ) {
 	return id;
 }
 void MNode::send_message( int link, const std::string& message,
-                          bool check_connection, MNode::routing_key_e _rout /* =routkeyout */ ) { //if don't have id
+                          bool check_connection, MNode::routing_key_e _rout /* =routing_key_e::out */ ) { //if don't have id
 	const int rout = static_cast< int >( _rout );
+	std::cerr << "id " << id[ static_cast< int >( ID::my ) ]
+	          << ": sending message to id " << id[ link ] << ":\"" << message << "\"\n";
 	if( !check_connection ) {
-		std::cout << "id " << id[ static_cast< int >( ID::my ) ]
-		          << ": sending message to id " << id[ link ] << ":\"" << message << "\"" << std::endl;
 		channel->BasicPublish( exchange_name,
 		                       routing_key[ link ][ rout ],
 		                       AmqpClient::BasicMessage::Create( message ) );
@@ -268,7 +292,7 @@ bool MNode::ping( int link ) {
 //	sleep( 5 );
 	bool wait;
 	std::string _message;
-	return get_message( link, _message, wait = true, consumer_e::ping_in );
+	return get_message( link, _message, wait = false, consumer_e::ping_in );
 
 //	return channel[ queue::ping_in ]->BasicGet( message, queue_name[ queue::ping_in ] );
 	//i donno if this would work
@@ -277,8 +301,8 @@ bool MNode::ping( int link ) {
 }
 std::string MNode::instant_ping_message() {
 	std::stringstream mssg;
-	mssg << Command::instant_ping << ' ' << id[ ID::my ];
-	return ;
+	mssg << static_cast< int >( Command::instant_ping ) << ' ' << id[ ID::my ];
+	return mssg.str();
 }
 // bool MNode::instant_ping_reply( const std::string& message ) {
 // 	return message == "p::1";
@@ -304,7 +328,7 @@ void MNode::attach_worker( int link, const std::string& command ) {
 	delete_link[ link ] = false;
 	std::string mssg_id = MNode::id_out_message( id[ static_cast< int >( ID::my ) ] );
 	bool check_connection;
-	send_message( link, mssg_id, check_connection = true );
+	send_message( link, mssg_id, check_connection = false );
 }
 
 void MNode::attach_worker( int link, int out_id, pid_t pid ) {
@@ -313,7 +337,8 @@ void MNode::attach_worker( int link, int out_id, pid_t pid ) {
 	create( link, pid, swap = true );
 	delete_link[ link ] = false;
 	std::string mssg_id = MNode::id_out_message( id[ static_cast< int >( ID::my ) ] );
-	send_message( link, mssg_id );
+	bool check_connection;
+	send_message( link, mssg_id, check_connection = false );
 }
 std::string MNode::id_out_message( int id ) {
 	std::stringstream mssg;
@@ -329,7 +354,7 @@ std::string MNode::attach_reply_message( const std::string& message, int my_id )
 	int pid;
 	int command;
 	mssg >> command >> another_id >> pid;
-	replymssg << static_cast< int >( Command::attach_c )
+	replymssg << static_cast< int >( Command::reply_c ) << ' '<< static_cast< int >( Command::attach_c )
 	          << ' ' << my_id << ' ' << another_id << ' ' << pid << ' ' << static_cast< int >( Reply::ok );
 	return replymssg.str();
 }
@@ -359,23 +384,35 @@ MNode::ExecCommand MNode::get_exec_command( const std::string& message ) {
 
 std::string MNode::exec_reply_message( int time, int id, ExecCommand command ) {
 	std::stringstream mssg;
-	mssg << static_cast< int >( Command::exec_c ) << ' ' << id << ' ' << static_cast< int >( command ) << ' ' << time << ' ' << static_cast< int >( Reply::ok );
+	mssg << static_cast< int >( Command::reply_c ) << ' '
+	     << static_cast< int >( Command::exec_c ) << ' '
+	     << id << ' ' << static_cast< int >( command ) << ' '
+	     << time << ' ' << static_cast< int >( Reply::ok );
 	return mssg.str();
 }
 
 std::string MNode::exec_reply_message( int id, ExecCommand command ) {
 	std::stringstream mssg;
-	mssg << static_cast< int >( Command::exec_c ) << ' ' << id << ' ' << static_cast< int >( command ) << ' ' << static_cast< int >( Reply::ok );
+	mssg  << static_cast< int >( Command::reply_c ) << ' '
+	      << static_cast< int >( Command::exec_c ) << ' '
+	      << id << ' ' << static_cast< int >( command ) << ' '
+	      << static_cast< int >( Reply::ok );
 	return mssg.str();
 }
 
 std::string MNode::ping_reply_message( int id ) {
 	std::stringstream mssg;
-	mssg << static_cast< int >( Command::ping_c ) << ' ' << id << ' ' << static_cast< int >( Reply::ok );
+	mssg << static_cast< int >( Command::reply_c ) << ' '
+	     << static_cast< int >( Command::ping_c ) << ' '
+	     << id << ' ' << static_cast< int >( Reply::ok );
 	return mssg.str();
 }
 
-
+std::string MNode::make_reply( const std::string& reply ) {
+	std::stringstream mssg;
+	mssg << static_cast< int >( Command::reply_c ) << ' ' << reply;
+	return mssg.str();
+}
 
 
 
@@ -384,7 +421,7 @@ std::string MNode::ping_reply_message( int id ) {
 
 void MNode::command_close( int link, int _id ) {
 	std::stringstream mssg;
-	mssg << static_cast< int >( Command::close_c ) << ' ' << id[ _id ];
+	mssg << static_cast< int >( Command::close_c ) << ' ' << id[ link ];
 	bool check_connection;
 	send_message( link, mssg.str(), check_connection = false );
 }
@@ -441,22 +478,22 @@ MNode::~MNode() {
 			if( !delete_link[ link ] ) {
 				command_close( link );
 			} else {
-				// std::cout << "id " << id[ static_cast< int >( ID::my ) ] << "->"
+				// std::cerr << "id " << id[ static_cast< int >( ID::my ) ] << "->"
 				//           << id[ link ] << " start cancelling...";
 
 				for( int consumer = 0; consumer < consumers_per_link /* = 3 */; ++consumer )
 					channel->BasicCancel( consumer_tag[ link ][ consumer ] );
 
-				// std::cout << "success; " << std::endl;
+				// std::cerr << "success; " << std::endl;
 				//unbind?
 				channel->DeleteExchange( exchange_name );
 				for( int i = 0; i < queues_per_link; ++i ) {
-					std::cout << "id " << id[ static_cast< int >( ID::my ) ] << "->"
+					std::cerr << "id " << id[ static_cast< int >( ID::my ) ] << "->"
 					          << id[ link ]<< " start deleting queue...";
 
 					channel->DeleteQueue( queue_name[ link ][ i ] );
 
-					std::cout << "success; " << std::endl;
+					std::cerr << "success; " << std::endl;
 				}
 			}
 		}

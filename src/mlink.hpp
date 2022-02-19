@@ -51,6 +51,7 @@ class MNode { //amount of links, here 1 link == 4 queue
 			error_c,
 			reply_c,
 			instant_ping,
+			instant_ping_reply,
 			undefined_c,
 		};
 		enum class ExecCommand {
@@ -84,14 +85,14 @@ class MNode { //amount of links, here 1 link == 4 queue
 		void command_close();
 		void ping_reply();
 		void set_my_id( int );
-		void instant_ping_reply( const std::string& );
+		std::string instant_ping_message();
+		void send_instant_ping_reply( const std::string& );
 		~MNode();
 		friend std::ostream& operator<<( std::ostream&, MNode& );
 
-		static std::string instant_ping_reply();
+		// static std::string instant_ping_reply();
 		static Command get_command( const std::string& );
 		static int get_id( const std::string& );
-		static std::string instant_ping_message();
 		static std::string id_out_message( int );
 		static void get_id( int&, const char** );
 		static ExecCommand get_exec_command( const std::string& );
@@ -103,6 +104,7 @@ class MNode { //amount of links, here 1 link == 4 queue
 		static std::string error_id_unreachable( int, int );
 		static std::string error_id_already_exist( int );
 		static std::string parse_reply( const std::string& );
+		static std::string make_reply( const std::string& reply );
 		// static bool instant_ping( const std::string& message );
 		// static bool instant_ping_reply( const std::string& message);
 		static pid_t create_worker( int );
