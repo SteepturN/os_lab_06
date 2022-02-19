@@ -48,11 +48,12 @@ void MNode::create_consumer( int link, MNode::queue_e _queue, const std::string&
 	if( _queue == queue_e::in ) {
 		consumer_tag[ link ][ static_cast< int >( consumer_e::in ) ] =
 			channel->BasicConsume( queue_name[ link ][ queue ],
-			                       queue_name[ link ][ queue ], true, true, false );
+			                       queue_name[ link ][ queue ], true, false, true, 100 );
+
 	} else if( _queue == queue_e::ping_in ) {
 		consumer_tag[ link ][ static_cast< int >( consumer_e::ping_in ) ] =
 			channel->BasicConsume( queue_name[ link ][ queue ],
-			                       queue_name[ link ][ queue ], true, true, false );
+			                       queue_name[ link ][ queue ], true, false, true, 100 );
 	} else {
 		std::cerr << "create_consumer has failed\n";
 	}
@@ -181,6 +182,11 @@ bool MNode::get_message( int link /* = -1 */, std::string& message,
 			}
 		}
 	}
+	// for( const auto& i : consumers ) {
+	// 	try {
+	// 		channel->BasicConsume( i, i, true, false, true, 100 );
+	// 	} catch ( ... ) {}
+	// }
 	if( consumers.empty() ) {
 		return false;
 	}
@@ -192,12 +198,16 @@ bool MNode::get_message( int link /* = -1 */, std::string& message,
 	}
 	try {
 		if( wait ) {
-			message = channel->BasicConsumeMessage( consumers )->Message()->Body(); //error? what if consumer_tag[ i ] == ""?
+
+			envelope = channel->BasicConsumeMessage( consumers ); //error? what if consumer_tag[ i ] == ""?
+			channel->BasicAck( envelope );
+			message = envelope->Message()->Body();
 			__time = 0;
 			return true;
 		} else {
 			const int timeout = 100;
 			if ( channel->BasicConsumeMessage( consumers, envelope, timeout ) ) {
+				channel->BasicAck( envelope );
 				message = envelope->Message()->Body();
 				__time = 0;
 				return true;
@@ -228,13 +238,11 @@ void MNode::send_instant_ping_reply( const std::string& command ) {
 	int _id;
 	bool check_connection;
 	mssg >> useless >> _id;
-	mssg.str( "" );
-	mssg << static_cast< int >( Command::instant_ping_reply ) << ' ' << _id;
+	std::stringstream send_mssg; // why can't I just use mssg( "" )??
+	send_mssg << static_cast< int >( Command::instant_ping_reply ) << ' ' << _id;
 	for( int link = 0; link < links_per_node; ++link ) {
 		if( link_exists[ link ] && ( id[ link ] == _id ) ) {
-			std::cerr << "mssg instant ping:" << mssg.str() << '\n';
-
-			send_message( link, mssg.str(),
+			send_message( link, send_mssg.str(),
 			              check_connection = false, routing_key_e::ping_out );
 			return;
 		}

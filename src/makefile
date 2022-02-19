@@ -14,3 +14,6 @@ reset:
 	sudo rabbitmqctl add_vhost myvhost
 	sudo rabbitmqctl set_permissions -p "myvhost" "newuser" '.*' '.*' '.*'
 	sudo rabbitmqctl list_queues --vhost myvhost
+list:
+	sudo rabbitmqctl list_queues --vhost myvhost
+	sudo rabbitmqctl list_consumers --vhost myvhost
