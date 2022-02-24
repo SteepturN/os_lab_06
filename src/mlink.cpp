@@ -46,11 +46,15 @@ void MNode::create_queue( int link, MNode::queue_e _queue, const std::string& su
 void MNode::create_consumer( int link, MNode::queue_e _queue, const std::string& suffix ) {
 	int queue = static_cast< int >( _queue );
 	if( _queue == queue_e::in ) {
+		std::cerr << "id " << id[ ID::my ] << ": creating consumer: <" << queue_name[ link ][ queue ] << '>'
+		          << " in consumer_tag[" << link << "][" << static_cast< int >( consumer_e::in ) << "]\n";
 		consumer_tag[ link ][ static_cast< int >( consumer_e::in ) ] =
 			channel->BasicConsume( queue_name[ link ][ queue ],
 			                       queue_name[ link ][ queue ], true, false, true, 100 );
 
 	} else if( _queue == queue_e::ping_in ) {
+		std::cerr << "id " << id[ ID::my ] << ": creating consumer: <" << queue_name[ link ][ queue ] << '>'
+		          << " in consumer_tag[" << link << "][" << static_cast< int >( consumer_e::ping_in ) << "]\n";
 		consumer_tag[ link ][ static_cast< int >( consumer_e::ping_in ) ] =
 			channel->BasicConsume( queue_name[ link ][ queue ],
 			                       queue_name[ link ][ queue ], true, false, true, 100 );
@@ -111,8 +115,8 @@ void MNode::create( int link, pid_t pid, bool swap ) {
 	link_exists[ link ] = true;
 }
 void MNode::create_link( int link, pid_t pid, int my_id ) {
-	create( link, pid, false );
 	id[ ID::my ] = my_id;
+	create( link, pid, false );
 	id[ link ] = get_out_id( link );
 	delete_link[ link ] = true;
 }
@@ -325,18 +329,12 @@ std::string MNode::error_id_unreachable( int id_out, int id_my ) {
 void MNode::attach_worker( int link, const std::string& command ) {
 	std::stringstream mssg( command );
 	int useless;
+	int _id;
 	mssg >> useless; //command
-	mssg >> id[ link ];
-
+	mssg >> _id;
 	int pid; // size( pid_t ) > size( int ) ?
 	mssg >> pid;
-
-	bool swap;
-	create( link, pid, swap = true );
-	delete_link[ link ] = false;
-	std::string mssg_id = MNode::id_out_message( id[ static_cast< int >( ID::my ) ] );
-	bool check_connection;
-	send_message( link, mssg_id, check_connection = false );
+	attach_worker( link, _id, pid );
 }
 
 void MNode::attach_worker( int link, int out_id, pid_t pid ) {
