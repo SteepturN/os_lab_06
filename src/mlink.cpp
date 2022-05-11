@@ -50,7 +50,7 @@ void MNode::create_consumer( int link, MNode::queue_e _queue, const std::string&
 		          << " in consumer_tag[" << link << "][" << static_cast< int >( consumer_e::in ) << "]\n";
 		consumer_tag[ link ][ static_cast< int >( consumer_e::in ) ] =
 			channel->BasicConsume( queue_name[ link ][ queue ],
-			                       queue_name[ link ][ queue ], true, false, true, 100 );
+			                       queue_name[ link ][ queue ], true, false, true, 0 );
 
 	} else if( _queue == queue_e::ping_in ) {
 		std::cerr << "id " << id[ ID::my ] << ": creating consumer: <" << queue_name[ link ][ queue ] << '>'
